@@ -1,0 +1,21 @@
+{
+  "kdf": {
+    "N": 32768,
+    "r": 8,
+    "p": 1,
+    "keyLen": 32
+  },
+  "salt": "aQXMAGbQJf0N+eKCycdxrjEun+apkEEh3Nhit3eNpVI=",
+  "verify_ct": "Cdo0az3oHQQLLlbZXZF8lsc5f1lj+sGWj6LC",
+  "verify_nonce": "0RrLH66/vj+I95ks",
+  "entries": {
+    "7-dlyVuUrJmj1JR-_m1gCQ": {
+      "id": "7-dlyVuUrJmj1JR-_m1gCQ",
+      "title": "qwertyuiuy",
+      "nonce": "5fHaeNXlUk5adzgy",
+      "ciphertext": "7FrtqGxQSkhOfPnTEFvJEXrhTEouP/Xh7Ic5mptdAhGsHQpuHHksYult5SR+7fDhOgzx3qJZDxquXhxZWlX0k/VfKm6RO+gYGVf3zeAeLW1O20YYzL0vbemN5xBjVZY5qN6RR55XifjthBAaPtZUGmUQLQuTJHnWDjFsNOY0P/DhZ47GToOXTQ+ks3uD4OP5kENKQiy0SJ7RjA3BSNW7UEkKyjfQfrwSJq50cxp2Er9iBIlb",
+      "createdAt": "2025-10-15T13:44:13.1311672Z",
+      "modifiedAt": "2025-10-15T13:44:13.1311672Z"
+    }
+  }
+}
