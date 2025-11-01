@@ -1,0 +1,441 @@
+package main
+
+import (
+	"appliedcryptography-starter-kit/internal/pwmanager"
+	"log"
+	"strings"
+
+	"github.com/lxn/walk"
+	. "github.com/lxn/walk/declarative"
+)
+
+type PasswordManagerWindow struct {
+	*walk.MainWindow
+	vault     *pwmanager.Vault
+	key       []byte
+	file      string
+	entries   []pwmanager.CipherEntry
+	currentID string
+
+	// Model
+	model *EntriesModel
+
+	// UI elements
+	table   *walk.TableView
+	details *walk.TextEdit
+	addAction    *walk.Action
+	deleteAction *walk.Action
+}
+
+// EntriesModel implements walk.TableModel
+type EntriesModel struct {
+	walk.TableModelBase
+	walk.SorterBase
+	items []pwmanager.CipherEntry
+}
+
+func (m *EntriesModel) RowCount() int {
+	return len(m.items)
+}
+
+func (m *EntriesModel) Value(row, col int) interface{} {
+	item := m.items[row]
+	switch col {
+	case 0:
+		return item.Title
+	case 1:
+		return item.ModifiedAt.Format("2006-01-02 15:04:05")
+	}
+	return nil
+}
+
+func main() {
+	mw := &PasswordManagerWindow{
+		model: new(EntriesModel),
+	}
+
+	// Create and show the home view
+	mw.showHomeView()
+	mw.Run()
+}
+
+// updateMenuItemsState updates the enabled state of menu items based on vault state
+func (mw *PasswordManagerWindow) updateMenuItemsState() {
+	enabled := mw.vault != nil && mw.key != nil
+	if mw.addAction != nil {
+		mw.addAction.SetEnabled(enabled)
+	}
+	if mw.deleteAction != nil {
+		mw.deleteAction.SetEnabled(enabled)
+	}
+}
+func (m *EntriesModel) SetItems(items []pwmanager.CipherEntry) {
+	m.items = items
+	m.PublishRowsReset()
+}
+
+func (mw *PasswordManagerWindow) refreshEntries() {
+	if mw.vault == nil || mw.key == nil {
+		return
+	}
+
+	mw.entries = mw.vault.List()
+	mw.model.SetItems(mw.entries)
+}
+
+func (mw *PasswordManagerWindow) onEntrySelected() {
+	idx := mw.table.CurrentIndex()
+	mw.details.SetText("")
+	if idx == -1 {
+		mw.currentID = ""
+		return
+	}
+
+	entry := mw.entries[idx]
+	mw.currentID = entry.ID
+	if entry.Text == nil {
+		return
+	}
+
+	text, err := mw.vault.Decrypt(mw.key, entry.Text)
+	if err != nil {
+		walk.MsgBox(mw, "Error", "Failed to decrypt entry: "+err.Error(),
+			walk.MsgBoxIconError)
+		return
+	}
+	mw.details.SetText(string(text))
+}
+				},
+			},
+		},
+		Children: []Widget{
+			HSplitter{
+				Children: []Widget{
+					TableView{
+						AssignTo:         &mw.table,
+						Model:            mw.model,
+						AlternatingRowBG: true,
+						Columns: []TableViewColumn{
+							{Title: "Title"},
+							{Title: "Modified", Width: 150},
+						},
+						OnSelectedIndexesChanged: mw.onEntrySelected,
+					},
+					TextEdit{
+						AssignTo: &mw.details,
+						ReadOnly: true,
+					},
+				},
+			},
+		},
+	}.Create()); err != nil {
+		log.Fatal(err)
+	}
+
+	mw.updateMenuItemsState()
+}
+
+func (mw *PasswordManagerWindow) updateMenuItemsState() {
+	enabled := mw.vault != nil && mw.key != nil
+	mw.addAction.SetEnabled(enabled)
+	mw.deleteAction.SetEnabled(enabled)
+}
+
+func (mw *PasswordManagerWindow) onNewVault() {
+	dlg := new(walk.FileDialog)
+	dlg.Title = "Create New Vault"
+	dlg.Filter = "JSON Files (*.json)|*.json"
+
+	if ok, err := dlg.ShowSave(mw); err != nil {
+		walk.MsgBox(mw, "Error", "Failed to show dialog: "+err.Error(),
+			walk.MsgBoxIconError)
+		return
+	} else if !ok {
+		return
+	}
+
+	// Get master password
+	var masterLE, confirmLE *walk.LineEdit
+	var dlgResult int
+	var dlgErr error
+	var masterPwd, confirmPwd string
+
+	dlgResult, dlgErr = Dialog{
+		Title:    "Create Vault",
+		MinSize:  Size{300, 150},
+		Layout:   VBox{},
+		Children: []Widget{
+			Label{Text: "Enter Master Password:"},
+			LineEdit{AssignTo: &masterLE, PasswordMode: true},
+			Label{Text: "Confirm Master Password:"},
+			LineEdit{AssignTo: &confirmLE, PasswordMode: true},
+			HSpacer{},
+		},
+	}.Run(mw)
+
+	if dlgErr != nil {
+		walk.MsgBox(mw, "Error", dlgErr.Error(), walk.MsgBoxIconError)
+		return
+	} else if dlgResult != walk.DlgCmdOK {
+		return
+	}
+
+	masterPwd = masterLE.Text()
+	confirmPwd = confirmLE.Text()
+
+	// Validate passwords
+	if masterPwd != confirmPwd {
+		walk.MsgBox(mw, "Error", "Passwords don't match", walk.MsgBoxIconError)
+		return
+	}
+	if len(masterPwd) < 8 {
+		walk.MsgBox(mw, "Error", "Password must be at least 8 characters",
+			walk.MsgBoxIconError)
+		return
+	}
+
+	// Create vault
+	v, key, err := pwmanager.Create(masterPwd)
+	if err != nil {
+		walk.MsgBox(mw, "Error", "Failed to create vault: "+err.Error(),
+			walk.MsgBoxIconError)
+		return
+	}
+
+	// Save vault
+	if err := v.Save(dlg.FilePath); err != nil {
+		walk.MsgBox(mw, "Error", "Failed to save vault: "+err.Error(),
+			walk.MsgBoxIconError)
+		return
+	}
+
+	mw.vault = v
+	mw.key = key
+	mw.file = dlg.FilePath
+	mw.refreshEntries()
+	mw.updateMenuItemsState()
+	mw.showMainView()
+}
+
+func (mw *PasswordManagerWindow) onOpenVault() {
+	dlg := new(walk.FileDialog)
+	dlg.Title = "Open Vault"
+	dlg.Filter = "JSON Files (*.json)|*.json"
+
+	if ok, err := dlg.ShowOpen(mw); err != nil {
+		walk.MsgBox(mw, "Error", "Failed to show dialog: "+err.Error(),
+			walk.MsgBoxIconError)
+		return
+	} else if !ok {
+		return
+	}
+
+	// Load vault
+	v, err := pwmanager.Load(dlg.FilePath)
+	if err != nil {
+		walk.MsgBox(mw, "Error", "Failed to load vault: "+err.Error(),
+			walk.MsgBoxIconError)
+		return
+	}
+
+	// Get master password
+	var masterLE *walk.LineEdit
+	var dlgResult int
+	var dlgErr error
+	var masterPwd string
+
+	dlgResult, dlgErr = Dialog{
+		Title:    "Open Vault",
+		MinSize:  Size{300, 100},
+		Layout:   VBox{},
+		Children: []Widget{
+			Label{Text: "Enter Master Password:"},
+			LineEdit{AssignTo: &masterLE, PasswordMode: true},
+			HSpacer{},
+		},
+	}.Run(mw)
+
+	if dlgErr != nil {
+		walk.MsgBox(mw, "Error", dlgErr.Error(), walk.MsgBoxIconError)
+		return
+	} else if dlgResult != walk.DlgCmdOK {
+		return
+	}
+
+	masterPwd = masterLE.Text()
+
+	// Unlock vault
+	key, err := v.Unlock(masterPwd)
+	if err != nil {
+		walk.MsgBox(mw, "Error", "Failed to unlock vault: "+err.Error(),
+			walk.MsgBoxIconError)
+		return
+	}
+
+	mw.vault = v
+	mw.key = key
+	mw.file = dlg.FilePath
+	mw.refreshEntries()
+	mw.updateMenuItemsState()
+}
+
+func (mw *PasswordManagerWindow) onAddEntry() {
+	var d *walk.Dialog
+	var acceptPB, cancelPB *walk.PushButton
+	var titleLE, usernameLE, passwordLE, urlLE *walk.LineEdit
+	var notesTE *walk.TextEdit
+	var dlgResult int
+	var dlgErr error
+
+	dlgResult, dlgErr = Dialog{
+		AssignTo:      &d,
+		Title:         "Add Entry",
+		DefaultButton: &acceptPB,
+		CancelButton:  &cancelPB,
+		MinSize:       Size{300, 300},
+		Layout:        VBox{},
+		Children: []Widget{
+			Composite{
+				Layout: Grid{Columns: 2},
+				Children: []Widget{
+					Label{Text: "Title:"},
+					LineEdit{AssignTo: &titleLE},
+					Label{Text: "Username:"},
+					LineEdit{AssignTo: &usernameLE},
+					Label{Text: "Password:"},
+					LineEdit{AssignTo: &passwordLE, PasswordMode: true},
+					Label{Text: "URL:"},
+					LineEdit{AssignTo: &urlLE},
+					Label{Text: "Notes:"},
+					TextEdit{AssignTo: &notesTE},
+				},
+			},
+			Composite{
+				Layout: HBox{},
+				Children: []Widget{
+					HSpacer{},
+					PushButton{
+						AssignTo: &acceptPB,
+						Text:     "OK",
+						OnClicked: func() {
+							if titleLE.Text() == "" || usernameLE.Text() == "" || passwordLE.Text() == "" {
+								walk.MsgBox(nil, "Error",
+									"Title, username, and password are required",
+									walk.MsgBoxIconError)
+								return
+							}
+							d.Accept()
+						},
+					},
+					PushButton{
+						AssignTo:  &cancelPB,
+						Text:      "Cancel",
+						OnClicked: func() { d.Cancel() },
+					},
+				},
+			},
+		},
+	}.Run(mw)
+
+	if dlgErr != nil {
+		log.Print("Dialog error:", dlgErr)
+		return
+	}
+
+	if dlgResult != walk.DlgCmdOK {
+		return
+	}
+
+	// Add entry
+	title := titleLE.Text()
+	username := usernameLE.Text()
+	password := passwordLE.Text()
+	url := urlLE.Text()
+	notes := notesTE.Text()
+
+	if title != "" && username != "" && password != "" {
+		_, err := mw.vault.AddEntry(mw.key, title, username, password, url, notes)
+		if err != nil {
+			walk.MsgBox(mw, "Error", "Failed to add entry: "+err.Error(),
+				walk.MsgBoxIconError)
+			return
+		}
+
+		if err := mw.vault.Save(mw.file); err != nil {
+			walk.MsgBox(mw, "Error", "Failed to save vault: "+err.Error(),
+				walk.MsgBoxIconError)
+			return
+		}
+
+		mw.refreshEntries()
+	}
+}
+
+func (mw *PasswordManagerWindow) onDeleteEntry() {
+	if mw.currentID == "" {
+		return
+	}
+
+	if walk.MsgBox(mw, "Confirm Delete",
+		"Are you sure you want to delete this entry?",
+		walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) == walk.DlgCmdNo {
+		return
+	}
+
+	if ok := mw.vault.Delete(mw.currentID); !ok {
+		walk.MsgBox(mw, "Error", "Failed to delete entry",
+			walk.MsgBoxIconError)
+		return
+	}
+
+	if err := mw.vault.Save(mw.file); err != nil {
+		walk.MsgBox(mw, "Error", "Failed to save vault: "+err.Error(),
+			walk.MsgBoxIconError)
+		return
+	}
+
+	mw.currentID = ""
+	mw.refreshEntries()
+}
+
+func (mw *PasswordManagerWindow) onEntrySelected() {
+	index := mw.table.CurrentIndex()
+	if index == -1 {
+		mw.currentID = ""
+		mw.details.SetText("")
+		return
+	}
+
+	entry := mw.model.items[index]
+	mw.currentID = entry.ID
+
+	plain, _, err := mw.vault.GetDecrypted(mw.key, entry.ID)
+	if err != nil {
+		mw.details.SetText("Error: " + err.Error())
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Title: " + entry.Title + "\r\n")
+	sb.WriteString("Username: " + plain.Username + "\r\n")
+	sb.WriteString("Password: " + plain.Password + "\r\n")
+	if plain.URL != "" {
+		sb.WriteString("URL: " + plain.URL + "\r\n")
+	}
+	if plain.Notes != "" {
+		sb.WriteString("Notes: " + plain.Notes + "\r\n")
+	}
+	sb.WriteString("\r\nCreated: " + entry.CreatedAt.Format("2006-01-02 15:04:05") + "\r\n")
+	sb.WriteString("Modified: " + entry.ModifiedAt.Format("2006-01-02 15:04:05"))
+
+	mw.details.SetText(sb.String())
+}
+
+func (mw *PasswordManagerWindow) refreshEntries() {
+	mw.entries = mw.vault.List()
+	mw.model.items = mw.entries
+	mw.model.PublishRowsReset()
+
+	// Clear selection
+	mw.table.SetCurrentIndex(-1)
+}
